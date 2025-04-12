@@ -1,0 +1,511 @@
+from ursina import *
+from math import sin, cos, radians, degrees, atan2
+import random
+
+# ---------------------------------------------------------------------
+# GLOBAL CONSTANTS
+# ---------------------------------------------------------------------
+
+BLOCK_SIZE = 20       # Each "city block" dimension (the land between roads).
+ROAD_WIDTH = 10       # Width of each road.
+CELL_SPACING = BLOCK_SIZE + ROAD_WIDTH  # Distance between parallel roads' center lines.
+GRID_SIZE = 2         # 2×2 blocks => 3 parallel roads in each direction.
+OFFSET = -(GRID_SIZE // 2) * CELL_SPACING  # So city is centered around (0,0).
+
+# ---------------------------------------------------------------------
+# ROAD CLASSES
+# ---------------------------------------------------------------------
+
+class RoadSegment(Entity):
+    def __init__(self, center, size, **kwargs):
+        super().__init__(
+            model='quad',
+            position=(center[0], 0.02, center[1]),
+            rotation_x=90,
+            scale=(size[0], size[1]),
+            color=color.rgb(30, 30, 30),  # asphalt black
+            **kwargs
+        )
+        # For collision checks:
+        self.center2d = Vec2(center[0], center[1])
+        self.half_size = Vec2(size[0]*0.5, size[1]*0.5)
+
+    def contains_point(self, pos):
+        p2 = Vec2(pos.x, pos.z)
+        return (
+            abs(p2.x - self.center2d.x) <= self.half_size.x and
+            abs(p2.y - self.center2d.y) <= self.half_size.y
+        )
+
+# (RoadArc left for reference if you need curved corners)
+class RoadArc(Entity):
+    def __init__(self, center, radius, start_angle, end_angle, width, segments=10, **kwargs):
+        super().__init__(**kwargs)
+        # Not used in this example.
+
+# ---------------------------------------------------------------------
+# BUILDINGS
+# ---------------------------------------------------------------------
+
+class WorkInProgress(Entity):
+    def __init__(self, position, **kwargs):
+        super().__init__(position=position, **kwargs)
+
+        self.cube = Entity(
+            parent=self,
+            model='cube',
+            scale=(3, 1, 0.1),
+            position=(0, 1.5, 0),
+            color=color.gray,
+            texture=load_texture('work_in_progress.jpg')
+        )
+
+        self.pole_left = Entity(
+            parent=self.cube,
+            model='cube',
+            scale=(-0.1, 1, 0.1),  # Made taller and wider
+            color=color.black,  # Brighter gray
+            position=(-0.3, -1, 0)  # Raised position
+        )
+
+        self.pole_right = Entity(
+            parent=self.cube,
+            model='cube',
+            scale=(0.1, 1, 0.1),  # Made taller and wider
+            color=color.black,  # Brighter gray
+            position=(0.3, -1, 0)  # Raised position
+        )
+
+class Building(Entity):
+    def __init__(self, position, **kwargs):
+        super().__init__(position=(position[0], 0, position[1]), **kwargs)
+        base_width = 15
+        base_depth = 15
+        base_height = 20
+        roof_height = 8
+
+        wall_texture = load_texture('building.jpg')
+        roof_texture = load_texture('building.jpg')
+
+        self.walls = Entity(
+            parent=self,
+            model='cube',
+            texture=wall_texture,
+            scale=(base_width, base_height, base_depth),
+            position=(0, base_height * 0.5, 0)
+        )
+
+        self.roof = Entity(
+            parent=self,
+            model='cone',
+            texture=roof_texture,
+            scale=(base_width * 1.2, roof_height, base_depth * 1.2),
+            position=(0, base_height, 0)
+        )
+
+# ---------------------------------------------------------------------
+# TRAFFIC LIGHT
+# ---------------------------------------------------------------------
+
+class StopSign(Entity):
+    def __init__(self, position, rotation_y=0, **kwargs):
+        super().__init__(position=position, rotation_y=rotation_y, **kwargs)
+
+        self.pole = Entity(
+            parent=self,
+            model='cube',
+            scale=(0.1, 4, 0.1),  # Made taller and wider
+            color=color.black,  # Brighter gray
+            position=(0, 1, 0)  # Raised position
+        )
+
+        self.sign = Entity(
+            parent=self,
+            model='cube',
+            scale=(1, 1, 0.1),
+            color=color.white,
+            position=(0, 3.5, 0)
+        )
+
+        # add a texture to the sign file name speed_limit.jpg
+        self.sign_texture = load_texture('stop_sign.jpg')
+        self.sign.texture = self.sign_texture
+
+
+
+class SpeedLimitSign(Entity):
+    def __init__(self, position, rotation_y=0, **kwargs):
+        super().__init__(position=position, rotation_y=rotation_y, **kwargs)
+
+        self.pole = Entity(
+            parent=self,
+            model='cube',
+            scale=(0.1, 4, 0.1),  # Made taller and wider
+            color=color.black,  # Brighter gray
+            position=(0, 1, 0)  # Raised position
+        )
+
+        self.sign = Entity(
+            parent=self,
+            model='cube',
+            scale=(1, 1, 0.1),
+            color=color.red,
+            position=(0, 3.5, 0)
+        )
+
+        # add a texture to the sign file name speed_limit.jpg
+        self.sign_texture = load_texture('speed_limit.jpg')
+        self.sign.texture = self.sign_texture
+
+
+
+class TrafficLight(Entity):
+    def __init__(self, position, rotation_y=0, light_index=0, **kwargs):
+        super().__init__(position=position, rotation_y=rotation_y, light_index=light_index, **kwargs)
+
+        self.pole = Entity(
+            parent=self,
+            model='cylinder',
+            scale=(1, 8, 1),
+            color=color.gray,
+            position=(0, 4, 0)
+        )
+        
+        self.box = Entity(
+            parent=self,
+            model='cube',
+            scale=(0.5, 1, 0.5),
+            color=color.dark_gray,
+            position=(0, 7.5, 0)
+        )
+        
+        self.red_light = Entity(
+            parent=self.box,
+            model='sphere',
+            scale=0.4,
+            color=color.rgb(50,0,0),
+            position=(0, 0.2, 0.6)
+        )
+        
+        self.green_light = Entity(
+            parent=self.box,
+            model='sphere',
+            scale=0.4,
+            color=color.rgb(0,50,0),
+            position=(0, -0.2, 0.6)
+        )
+        
+        self.is_red = True
+        self.timer = 20
+        self.time_elapsed = 0
+    
+    def update(self):
+        self.time_elapsed += time.dt
+        
+        if self.time_elapsed >= 20:
+            self.time_elapsed = 0
+            # self.is_red = not self.is_red
+
+            if self.light_index == 0:
+                self.light_index = 1
+                self.red_light.color = color.rgb(255,0,0)   # bright red
+                self.green_light.color = color.rgb(0,50,0)  # dim green
+            else:
+                self.light_index = 0
+                self.red_light.color = color.rgb(50,0,0)    # dim red
+                self.green_light.color = color.rgb(0,255,0) # bright green
+            
+            # if self.is_red:
+            #     self.red_light.color = color.rgb(255,0,0)   # bright red
+            #     self.green_light.color = color.rgb(0,50,0)  # dim green
+            # else:
+            #     self.red_light.color = color.rgb(50,0,0)    # dim red
+            #     self.green_light.color = color.rgb(0,255,0) # bright green
+
+# ---------------------------------------------------------------------
+# CAR
+# ---------------------------------------------------------------------
+
+class Car(Entity):
+    def __init__(self, roads, **kwargs):
+        super().__init__(
+            model='cube',
+            scale=(1.5, 0.5, 3),
+            color=color.rgb(220,20,60),
+            # Start near the bottom row
+            position=(OFFSET + 1*CELL_SPACING, 0.3, OFFSET + ROAD_WIDTH*0.35),
+            rotation_y=90,
+            **kwargs
+        )
+        self.roads = roads
+        self.speed = 0
+        self.acceleration = 1
+        self.max_speed = 5
+        self.turn_speed = 100
+
+        self.create_wheels()
+        
+        self.speedometer = Text(
+            text="Speed: 0 km/h",
+            position=(0, -0.4),
+            origin=(0, 0),
+            scale=1.5,
+            color=color.white,
+            background=True,
+            background_color=color.black66
+        )
+
+    def create_wheels(self):
+        front_z = 1.5
+        back_z  = -1.5
+        side_x  = 1.9
+        wheel_r = 1.3
+        wheel_w = 1.2
+
+        wheel_positions = [
+            ( side_x, -0.25, front_z),
+            (-side_x, -0.25, front_z),
+            ( side_x, -0.25, back_z),
+            (-side_x, -0.25, back_z)
+        ]
+        for pos in wheel_positions:
+            Entity(
+                parent=self,
+                model='cylinder',
+                scale=(wheel_w, wheel_r*2, wheel_r*2),
+                color=color.black,
+                position=pos,
+                rotation=(0,0,90)
+            )
+
+    def update(self):
+        dt = time.dt
+        if held_keys['w']:
+            self.speed += self.acceleration * dt
+        elif held_keys['s']:
+            self.speed -= self.acceleration * dt
+        else:
+            self.speed = lerp(self.speed, 0, 1*dt)
+
+        if held_keys['space']:
+            self.speed = lerp(self.speed, 0, 10*dt)
+
+        self.speed = clamp(self.speed, -self.max_speed/2, self.max_speed)
+        
+        speed_kmh = abs(round(self.speed * 12))  # 5 * 12 = 60 km/h top
+        self.speedometer.text = f"Speed: {speed_kmh} km/h"
+
+        direction = 0
+        if held_keys['a']:
+            direction = -1
+        elif held_keys['d']:
+            direction = 1
+        turn_amount = direction * self.turn_speed * dt * (abs(self.speed)/self.max_speed)
+        self.rotation_y += turn_amount
+
+        displacement = self.forward * self.speed * dt
+        new_pos = self.position + displacement
+
+        if is_on_road(new_pos, self.roads):
+            self.position = new_pos
+        else:
+            self.speed = 0
+
+# ---------------------------------------------------------------------
+# IS_ON_ROAD FUNCTION
+# ---------------------------------------------------------------------
+
+def is_on_road(pos, roads):
+    for r in roads:
+        if r.contains_point(pos):
+            return True
+    return False
+
+# ---------------------------------------------------------------------
+# ZEBRA CROSSING - ONLY AT CENTER INTERSECTION
+# ---------------------------------------------------------------------
+
+def create_crossing_stripes(x, z, orientation, num_stripes=7, stripe_thickness=1, gap=0.5):
+    """
+    Create zebra crossing stripes at (x, z) for 'horizontal' or 'vertical'.
+    Simplified: each crossing is 5 stripes, each 1 unit thick, with 0.5 gap.
+    """
+    total_length = num_stripes * stripe_thickness + (num_stripes - 1) * gap
+    start_offset = -total_length/2 + stripe_thickness/2
+
+    if orientation == 'horizontal':
+        for i in range(num_stripes):
+            stripe_z = z + start_offset + i*(stripe_thickness + gap)
+            Entity(
+                model='quad',
+                scale=(3, stripe_thickness),  # 3 wide in x
+                position=(x , 0.03, stripe_z),
+                rotation_x=90,
+                color=color.white
+            )
+    else:  # vertical
+        for i in range(num_stripes):
+            stripe_x = x + start_offset + i*(stripe_thickness + gap)
+            Entity(
+                model='quad',
+                scale=(stripe_thickness, 3),  # 3 wide in z
+                position=(stripe_x, 0.03, z),
+                rotation_x=90,
+                color=color.white
+            )
+
+def create_center_crosswalks():
+    """
+    Place crosswalks ONLY at the center intersection (the single intersection
+    in a 2x2 grid that sits between the 4 blocks).
+    
+    We'll place 4 sets of stripes: 2 horizontal, 2 vertical, one on each side
+    of the intersection.
+    """
+    cx = OFFSET + 1 * CELL_SPACING
+    cz = OFFSET + 1 * CELL_SPACING
+
+    # How far from the intersection center to place stripes
+    crossing_offset = 1.5
+    
+    # Horizontal stripes near the north edge
+    create_crossing_stripes(cx, cz + (ROAD_WIDTH - crossing_offset), 'vertical')
+    # Horizontal stripes near the south edge
+    create_crossing_stripes(cx, cz - (ROAD_WIDTH - crossing_offset), 'vertical')
+
+    # Vertical stripes near the east edge
+    create_crossing_stripes(cx + (ROAD_WIDTH - crossing_offset), cz, 'horizontal')
+    # Vertical stripes near the west edge
+    create_crossing_stripes(cx - (ROAD_WIDTH - crossing_offset), cz, 'horizontal')
+
+# ---------------------------------------------------------------------
+# CREATE THE CITY GRID
+# ---------------------------------------------------------------------
+
+def create_traffic_lights():
+    """
+    Place traffic lights if desired. In a 2x2 grid, you might only want
+    them at the center intersection as well. But here, we place two
+    for demonstration: one facing north-south, one east-west.
+    """
+    traffic_lights = []
+    
+    # The center intersection
+    cx = OFFSET + 1 * CELL_SPACING
+    cz = OFFSET + 1 * CELL_SPACING
+    
+    # Light facing north-south
+    traffic_lights.append(TrafficLight(
+        position=(cx + ROAD_WIDTH/2, -3, cz),
+        rotation_y=90,
+        light_index=0
+    ))
+    
+    # Light facing east-west
+    traffic_lights.append(TrafficLight(
+        position=(cx, -3, cz + ROAD_WIDTH/2),
+        rotation_y=0,
+        light_index=1
+    ))
+
+    # Light facing south-north
+    traffic_lights.append(TrafficLight(
+        position=(cx - ROAD_WIDTH/2, -3, cz),
+        rotation_y=-90,
+        light_index=1
+    ))
+
+    # Light facing west-east
+    traffic_lights.append(TrafficLight(
+        position=(cx, -3, cz - ROAD_WIDTH/2),
+        rotation_y=180,
+        light_index=0
+    ))
+    
+    
+    
+    
+    
+    
+    return traffic_lights
+
+def create_speed_limit_signs():
+    speed_limit_signs = []
+
+    speed_limit_signs.append(SpeedLimitSign(position=(OFFSET - ROAD_WIDTH*0.4, 0, OFFSET + 1 * CELL_SPACING)))
+
+    # create a stop sign at the corner of the straight road on the right from both sides
+
+    return speed_limit_signs
+
+def create_stop_signs():
+    stop_signs = []
+
+    stop_signs.append(StopSign(position=(OFFSET - 2 + 2 * CELL_SPACING, 0, OFFSET + 2 * CELL_SPACING), rotation_y=90))
+    stop_signs.append(StopSign(position=(OFFSET + 2 * CELL_SPACING, 0, OFFSET - 2 + 0 * CELL_SPACING), rotation_y=90))
+    stop_signs.append(WorkInProgress(position=(OFFSET + 2 * CELL_SPACING, 0, OFFSET + 1 * CELL_SPACING), rotation_y=90))
+
+    
+    return stop_signs
+
+def create_city():
+    # 1) Horizontal roads
+    for j in range(GRID_SIZE + 1):
+        z = OFFSET + j*CELL_SPACING
+        center = (0, z)
+        length = GRID_SIZE * CELL_SPACING
+        roads.append(RoadSegment(center=center, size=(length, ROAD_WIDTH)))
+
+    # 2) Vertical roads
+    for i in range(GRID_SIZE + 1):
+        x = OFFSET + i*CELL_SPACING
+        center = (x, 0)
+        length = GRID_SIZE * CELL_SPACING
+        roads.append(RoadSegment(center=center, size=(ROAD_WIDTH, length)))
+    
+    # 3) Buildings in each block
+    for i in range(GRID_SIZE):
+        for j in range(GRID_SIZE):
+            bx = OFFSET + i*CELL_SPACING + (CELL_SPACING*0.5)
+            bz = OFFSET + j*CELL_SPACING + (CELL_SPACING*0.5)
+            Building(position=(bx, bz))
+    
+    # 4) Crosswalks ONLY at center intersection
+    create_center_crosswalks()
+    create_speed_limit_signs()
+    create_stop_signs()
+
+    
+    # 5) Traffic lights (optionally, just at center intersection)
+    return create_traffic_lights()
+
+# ---------------------------------------------------------------------
+# MAIN APP
+# ---------------------------------------------------------------------
+
+app = Ursina()
+window.color = color.black
+
+from ursina.prefabs.sky import Sky
+Sky(color=color.rgb(80,160,255))
+
+# Lighting
+AmbientLight(color=color.rgb(180,180,180))
+DirectionalLight(direction=(1,-1,1), color=color.white)
+
+roads = []
+traffic_lights = create_city()
+
+car = Car(roads=roads)
+
+def update():
+    car.update()
+    for light in traffic_lights:
+        light.update()
+
+    # Simple chase camera
+    offset = car.forward * -5 + Vec3(0, 3, 0)
+    camera.position = car.position + offset
+    camera.look_at(car.position + car.forward*10)
+
+app.run()

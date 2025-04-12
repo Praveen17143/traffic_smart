@@ -1,0 +1,6 @@
+ursina==3.5.0
+pillow
+numpy
+pygame
+PyQt5
+PyQt5-stubs 
