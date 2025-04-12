@@ -26,7 +26,7 @@ A `requirements.txt` file is provided to install all necessary dependencies.
 
 1. **Clone the repository** (if applicable):
    ```bash
-   git clone https://github.com/yourusername/traffic-rules-games.git
+   git clone https://github.com/Praveen17143/traffic_smart
    cd traffic-rules-games
    ```
 
